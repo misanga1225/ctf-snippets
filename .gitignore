@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+
+# 解析対象のキャプチャはコミットしない
+*.pcap
+*.pcapng
+*.cap
+
+# スクリプトの出力物
+# extract_http.sh の出力先 (default)
+out/
+# follow_tcp.sh の出力先 (default)
+streams/
+# nmap_quick.sh の出力 (.nmap/.gnmap/.xml)
+nmap_*.nmap
+nmap_*.gnmap
+nmap_*.xml
+
+# 実データのログ・解析結果（認証ログやアクセスログには個人情報・IP が含まれる）
+*.log
+*.log.*
+*.gz
+*.csv
+*.bin

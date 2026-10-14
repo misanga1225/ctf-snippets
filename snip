@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""snip - ctf-snippets のスクリプトを一覧・検索・表示する CLI。
+
+各スクリプト冒頭の `# @desc:` / `# @tags:` / `# @deps:` / `# @usage:` ヘッダを読み取る。
+"""
+import argparse
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+EXTS = {".py", ".sh"}
+HEADER_RE = re.compile(r"^#\s*@(\w+):\s*(.*)$")
+README = ROOT / "README.md"
+START, END = "<!-- SNIPPETS:START -->", "<!-- SNIPPETS:END -->"
+
+# README とリスト表示でのカテゴリ表示名（ディレクトリ → 見出し）
+CATEGORY_TITLES = {
+    "encoding": "🔤 encoding — エンコード / デコード",
+    "network/pcap": "📦 network/pcap — パケットキャプチャ解析",
+    "network/recon": "🛰️ network/recon — 偵察・ネットワーク計算",
+    "soc": "🛡️ soc — NOC/SOC 運用・ログ解析",
+}
+
+USE_COLOR = sys.stdout.isatty()
+
+
+def c(text, code):
+    return f"\033[{code}m{text}\033[0m" if USE_COLOR else text
+
+
+def parse_header(path):
+    meta = {"desc": "", "tags": "", "deps": "none", "usage": ""}
+    with path.open(encoding="utf-8", errors="replace") as f:
+        for i, line in enumerate(f):
+            if i > 30:
+                break
+            m = HEADER_RE.match(line.strip())
+            if m and m.group(1) in meta:
+                meta[m.group(1)] = m.group(2).strip()
+    return meta
+
+
+def collect():
+    snippets = []
+    for path in sorted(ROOT.rglob("*")):
+        if path.suffix not in EXTS or not path.is_file():
+            continue
+        rel = path.relative_to(ROOT)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        meta = parse_header(path)
+        if not meta["desc"]:
+            continue
+        meta["path"] = rel.as_posix()
+        meta["name"] = path.name
+        meta["category"] = rel.parent.as_posix()
+        snippets.append(meta)
+    return snippets
+
+
+def print_rows(snippets):
+    current = None
+    for s in snippets:
+        if s["category"] != current:
+            current = s["category"]
+            print(c(f"\n[{current}]", "1;36"))
+        print(f"  {c(s['path'], '33'):<40}  {s['desc']}")
+
+
+def cmd_list(args):
+    snippets = collect()
+    if args.category:
+        snippets = [s for s in snippets if s["category"].startswith(args.category)]
+    if not snippets:
+        sys.exit(f"no snippets in category: {args.category}")
+    print_rows(snippets)
+
+
+def cmd_search(args):
+    words = [w.lower() for w in args.keywords]
+    hits = [
+        s for s in collect()
+        if all(w in " ".join((s["path"], s["desc"], s["tags"])).lower() for w in words)
+    ]
+    if not hits:
+        sys.exit("no match")
+    print_rows(hits)
+
+
+def find_one(name):
+    matches = [s for s in collect() if name in (s["name"], s["path"], Path(s["name"]).stem)]
+    if not matches:
+        matches = [s for s in collect() if name in s["path"]]
+    if len(matches) != 1:
+        cands = ", ".join(s["path"] for s in matches) or "none"
+        sys.exit(f"'{name}' に一致するスクリプトが {len(matches)} 件です: {cands}")
+    return matches[0]
+
+
+def cmd_show(args):
+    s = find_one(args.name)
+    if args.cat:
+        sys.stdout.write((ROOT / s["path"]).read_text(encoding="utf-8"))
+        return
+    print(c(s["path"], "1;33"))
+    print(f"  desc : {s['desc']}")
+    print(f"  tags : {s['tags']}")
+    print(f"  deps : {s['deps']}")
+    print(f"  usage: {s['usage']}")
+
+
+def cmd_path(args):
+    print(ROOT / find_one(args.name)["path"])
+
+
+def render_table():
+    out = []
+    groups = {}
+    for s in collect():
+        groups.setdefault(s["category"], []).append(s)
+    for cat in sorted(groups, key=lambda k: list(CATEGORY_TITLES).index(k) if k in CATEGORY_TITLES else 99):
+        out.append(f"### {CATEGORY_TITLES.get(cat, cat)}\n")
+        out.append("| スクリプト | 用途 | 依存 | 使用例 |")
+        out.append("|---|---|---|---|")
+        for s in groups[cat]:
+            usage = s["usage"].replace("|", "\\|")
+            out.append(f"| [`{s['name']}`]({s['path']}) | {s['desc']} | {s['deps']} | `{usage}` |")
+        out.append("")
+    return "\n".join(out)
+
+
+def cmd_readme(args):
+    text = README.read_text(encoding="utf-8")
+    if START not in text or END not in text:
+        sys.exit(f"README.md に {START} / {END} マーカーがありません")
+    head, rest = text.split(START, 1)
+    _, tail = rest.split(END, 1)
+    new = f"{head}{START}\n\n{render_table()}\n{END}{tail}"
+    if args.check:
+        if new != text:
+            sys.exit("README.md のスクリプト一覧が古いです。`./snip readme` を実行してください")
+        print("README.md is up to date")
+        return
+    README.write_text(new, encoding="utf-8")
+    print("README.md の一覧を更新しました")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="snip", description="ctf-snippets の一覧・検索・表示")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("list", aliases=["ls"], help="カテゴリ別に一覧表示")
+    sp.add_argument("category", nargs="?", help="例: encoding, network, soc")
+    sp.set_defaults(func=cmd_list)
+
+    sp = sub.add_parser("search", aliases=["s"], help="説明・タグ・パスを AND 検索")
+    sp.add_argument("keywords", nargs="+")
+    sp.set_defaults(func=cmd_search)
+
+    sp = sub.add_parser("show", help="usage / 依存を表示 (--cat で本文)")
+    sp.add_argument("name", help="ファイル名・拡張子なし名・パスのいずれか")
+    sp.add_argument("--cat", action="store_true", help="スクリプト本文を出力（コピペ用）")
+    sp.set_defaults(func=cmd_show)
+
+    sp = sub.add_parser("path", help="スクリプトの絶対パスを出力（$(snip path b64) 用）")
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_path)
+
+    sp = sub.add_parser("readme", help="README.md のスクリプト一覧表を再生成")
+    sp.add_argument("--check", action="store_true", help="更新が必要なら非0で終了")
+    sp.set_defaults(func=cmd_readme)
+
+    args = p.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

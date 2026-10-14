@@ -1,0 +1,5 @@
+# 任意依存。ほとんどのスクリプトは標準ライブラリのみで動作します。
+# pcap 系スクリプトは外部コマンド tshark (Wireshark CLI) を使用。
+#   macOS:  brew install wireshark
+#   Debian: sudo apt install tshark
+scapy>=2.5  # テスト用 pcap 生成
