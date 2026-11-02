@@ -2,15 +2,17 @@
 """snip - ctf-snippets のスクリプトを一覧・検索・表示する CLI。
 
 各スクリプト冒頭の `# @desc:` / `# @tags:` / `# @deps:` / `# @usage:` ヘッダを読み取る。
+（C / JavaScript / Java では `// @desc:` のように `//` コメントで書く）
 """
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-EXTS = {".py", ".sh"}
-HEADER_RE = re.compile(r"^#\s*@(\w+):\s*(.*)$")
+EXTS = {".py", ".sh", ".c", ".js", ".java"}
+HEADER_RE = re.compile(r"^(?:#|//)\s*@(\w+):\s*(.*)$")
 README = ROOT / "README.md"
 START, END = "<!-- SNIPPETS:START -->", "<!-- SNIPPETS:END -->"
 
@@ -19,6 +21,10 @@ CATEGORY_TITLES = {
     "encoding": "🔤 encoding — エンコード / デコード",
     "network/pcap": "📦 network/pcap — パケットキャプチャ解析",
     "network/recon": "🛰️ network/recon — 偵察・ネットワーク計算",
+    "reversing/surface": "🔍 reversing/surface — 表層解析",
+    "reversing/static": "🧩 reversing/static — 静的解析・パッチ",
+    "reversing/dynamic": "🐞 reversing/dynamic — 動的解析",
+    "reversing/solve": "🧮 reversing/solve — シンボリック実行・ソルバ",
     "soc": "🛡️ soc — NOC/SOC 運用・ログ解析",
 }
 
@@ -59,9 +65,14 @@ def collect():
     return snippets
 
 
+def category_key(cat):
+    order = list(CATEGORY_TITLES)
+    return (order.index(cat) if cat in order else 99, cat)
+
+
 def print_rows(snippets):
     current = None
-    for s in snippets:
+    for s in sorted(snippets, key=lambda s: (category_key(s["category"]), s["path"])):
         if s["category"] != current:
             current = s["category"]
             print(c(f"\n[{current}]", "1;36"))
@@ -114,36 +125,65 @@ def cmd_path(args):
     print(ROOT / find_one(args.name)["path"])
 
 
-def render_table():
+def render_table(scope=""):
+    """scope（ROOT からの相対ディレクトリ）配下のスクリプト表を生成。リンクは README からの相対パス。
+    ルート README は概要なので「スクリプト / 用途」だけの簡易表、各分野の README は依存・使用例つき"""
+    compact = not scope
     out = []
     groups = {}
     for s in collect():
+        if scope and not (s["category"] == scope or s["category"].startswith(scope + "/")):
+            continue
         groups.setdefault(s["category"], []).append(s)
-    for cat in sorted(groups, key=lambda k: list(CATEGORY_TITLES).index(k) if k in CATEGORY_TITLES else 99):
-        out.append(f"### {CATEGORY_TITLES.get(cat, cat)}\n")
-        out.append("| スクリプト | 用途 | 依存 | 使用例 |")
-        out.append("|---|---|---|---|")
+    for cat in sorted(groups, key=category_key):
+        title = CATEGORY_TITLES.get(cat, cat)
+        if compact and (ROOT / cat / "README.md").exists():
+            title += f"（詳細: [{cat}/README.md]({cat}/README.md)）"
+        out.append(f"### {title}\n")
+        out.append("| スクリプト | 用途 |" if compact else "| スクリプト | 用途 | 依存 | 使用例 |")
+        out.append("|---|---|" if compact else "|---|---|---|---|")
         for s in groups[cat]:
             usage = s["usage"].replace("|", "\\|")
-            out.append(f"| [`{s['name']}`]({s['path']}) | {s['desc']} | {s['deps']} | `{usage}` |")
+            link = os.path.relpath(s["path"], scope or ".")
+            if compact:
+                out.append(f"| [`{s['name']}`]({link}) | {s['desc']} |")
+            else:
+                out.append(f"| [`{s['name']}`]({link}) | {s['desc']} | {s['deps']} | `{usage}` |")
         out.append("")
     return "\n".join(out)
 
 
+def readme_files():
+    """マーカーを含む README.md（ルート + 各分野ディレクトリ）"""
+    files = [README] + sorted(p for p in ROOT.rglob("README.md") if p != README)
+    return [p for p in files
+            if not any(part.startswith(".") for part in p.relative_to(ROOT).parts)
+            and START in p.read_text(encoding="utf-8")]
+
+
 def cmd_readme(args):
-    text = README.read_text(encoding="utf-8")
-    if START not in text or END not in text:
-        sys.exit(f"README.md に {START} / {END} マーカーがありません")
-    head, rest = text.split(START, 1)
-    _, tail = rest.split(END, 1)
-    new = f"{head}{START}\n\n{render_table()}\n{END}{tail}"
+    stale = []
+    for path in readme_files():
+        text = path.read_text(encoding="utf-8")
+        head, rest = text.split(START, 1)
+        if END not in rest:
+            sys.exit(f"{path.relative_to(ROOT)} に {END} マーカーがありません")
+        _, tail = rest.split(END, 1)
+        scope = path.parent.relative_to(ROOT).as_posix()
+        new = f"{head}{START}\n\n{render_table('' if scope == '.' else scope)}\n{END}{tail}"
+        if new == text:
+            continue
+        stale.append(path.relative_to(ROOT).as_posix())
+        if not args.check:
+            path.write_text(new, encoding="utf-8")
     if args.check:
-        if new != text:
-            sys.exit("README.md のスクリプト一覧が古いです。`./snip readme` を実行してください")
-        print("README.md is up to date")
-        return
-    README.write_text(new, encoding="utf-8")
-    print("README.md の一覧を更新しました")
+        if stale:
+            sys.exit("スクリプト一覧が古い README があります: " + ", ".join(stale) + "\n`./snip readme` を実行してください")
+        print("all README files are up to date")
+    elif stale:
+        print("一覧を更新しました: " + ", ".join(stale))
+    else:
+        print("変更なし（すべて最新）")
 
 
 def main():
@@ -151,7 +191,7 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("list", aliases=["ls"], help="カテゴリ別に一覧表示")
-    sp.add_argument("category", nargs="?", help="例: encoding, network, soc")
+    sp.add_argument("category", nargs="?", help="例: encoding, network, soc, reversing/static")
     sp.set_defaults(func=cmd_list)
 
     sp = sub.add_parser("search", aliases=["s"], help="説明・タグ・パスを AND 検索")
@@ -167,7 +207,7 @@ def main():
     sp.add_argument("name")
     sp.set_defaults(func=cmd_path)
 
-    sp = sub.add_parser("readme", help="README.md のスクリプト一覧表を再生成")
+    sp = sub.add_parser("readme", help="README.md（ルート + 各分野）のスクリプト一覧表を再生成")
     sp.add_argument("--check", action="store_true", help="更新が必要なら非0で終了")
     sp.set_defaults(func=cmd_readme)
 
