@@ -1,5 +1,15 @@
 # 任意依存。ほとんどのスクリプトは標準ライブラリのみで動作します。
+# 必要なものだけ入れてください（venv 推奨: python3 -m venv .venv && source .venv/bin/activate）
+#
 # pcap 系スクリプトは外部コマンド tshark (Wireshark CLI) を使用。
 #   macOS:  brew install wireshark
 #   Debian: sudo apt install tshark
-scapy>=2.5  # テスト用 pcap 生成
+
+scapy>=2.5          # network: テスト用 pcap 生成
+
+# reversing/solve
+z3-solver>=4.12     # z3_template.py
+angr>=9.2           # angr_solve.py（重い。Python 3.10〜3.12 推奨）
+
+# reversing/dynamic
+frida-tools>=12     # frida_hook.js（frida コマンド）

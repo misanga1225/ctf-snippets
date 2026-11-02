@@ -24,3 +24,13 @@ nmap_*.xml
 *.gz
 *.csv
 *.bin
+
+# reversing の出力物
+# patch_bytes.py の出力 (default: <file>.patched)
+*.patched
+# ld_preload_hook.c のビルド結果
+*.so
+# embedded_scan.py -x / binwalk の出力
+carved/
+_*.extracted/
+# ghidra_decompile.sh の出力 (default: <binary>.c) は名前が様々なので必要に応じて追加
